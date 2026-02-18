@@ -12,14 +12,13 @@ terraform {
     }
   }
 
-  # TODO: リモートバックエンドを設定する場合はここに追加
-  # backend "gcs" {
-  #   bucket = "your-terraform-state-bucket"
-  #   prefix = "gomethod"
-  # }
+  backend "gcs" {
+    bucket = "gomethod-tfstate"
+    prefix = "gomethod"
+  }
 }
 
 provider "google" {
-  project = var.project_id
-  region  = var.region
+  project = "gomethod"
+  region  = "asia-northeast1"
 }

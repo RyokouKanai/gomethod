@@ -3,3 +3,10 @@
 
 project_id = "your-gcp-project-id"
 region     = "asia-northeast1"
+
+# Cloud SQL
+# db_tier          = "db-f1-micro"    # デフォルト: 最小構成
+# db_mysql_version = "MYSQL_8_0"      # デフォルト: MySQL 8.0
+# db_name          = "gmethod_production"
+# db_user          = "gmethod"
+db_password = "your-secure-password"

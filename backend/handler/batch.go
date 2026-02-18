@@ -1,9 +1,7 @@
 package handler
 
 import (
-	"crypto/subtle"
 	"net/http"
-	"os"
 
 	"github.com/RyokouKanai/gomethod/batch"
 	"github.com/gin-gonic/gin"
@@ -20,27 +18,6 @@ var batchRegistry = map[string]func(){
 	"send_notice":                batch.SendNotice,
 }
 
-// BatchAuthMiddleware validates the batch request using a shared secret token.
-// Cloud Scheduler sends this token in the Authorization header.
-func BatchAuthMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		token := os.Getenv("BATCH_AUTH_TOKEN")
-		if token == "" {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "batch auth not configured"})
-			return
-		}
-
-		authHeader := c.GetHeader("Authorization")
-		expected := "Bearer " + token
-
-		if subtle.ConstantTimeCompare([]byte(authHeader), []byte(expected)) != 1 {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-			return
-		}
-
-		c.Next()
-	}
-}
 
 // BatchHandler executes a batch job by name.
 // POST /batch/:name

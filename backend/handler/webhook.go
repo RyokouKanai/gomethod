@@ -88,9 +88,3 @@ type LineWebhookBody struct {
 	Events []LineEvent `json:"events"`
 }
 
-// MCJHandler handles the MCJ registration endpoint.
-func MCJHandler(c *gin.Context) {
-	// Placeholder for MCJ::RegistProductAndRelateAuthRule
-	log.Println("MCJ regist_product_and_relate_auth_rule called")
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}

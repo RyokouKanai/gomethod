@@ -3,10 +3,7 @@ package action
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
@@ -76,11 +73,6 @@ func (r *Registry) registerAll() {
 	r.actions["feeling_setting_edit"] = feelingSettingEdit
 	r.actions["feeling_setting_update"] = feelingSettingUpdate
 	r.actions["save_selected_option"] = saveSelectedOption
-
-	// File actions
-	r.actions["dream_wish_file_create"] = dreamWishFileCreate
-	r.actions["dream_wish_file_update"] = dreamWishFileUpdate
-	r.actions["dream_wish_file_show"] = dreamWishFileShow
 
 	// Admin actions
 	r.actions["broadcasts_confirm"] = broadcastsConfirm
@@ -343,59 +335,12 @@ func happinessDestroy(user *model.User, _ string, _ string, nextMessage *model.M
 	return nextMessage.GetContent() + "\n\n" + plain
 }
 
-// ==================== Talks (OpenAI) ====================
-
-func talksIndex(_ *model.User, msg string, _ string, _ *model.Message) interface{} {
-	n, err := strconv.Atoi(msg)
-	if err == nil && n != 0 {
-		return "数字以外の言葉を入力してね！"
+func talksIndex(_ *model.User, _ string, _ string, _ *model.Message) interface{} {
+	badResp := model.GetMessageByScope("bad_talk_response")
+	if badResp != nil {
+		return badResp.GetContent()
 	}
-
-	endpoint := os.Getenv("OPEN_AI_COMPLETION_ENDPOINT")
-	apiKey := os.Getenv("OPEN_AI_API_KEY")
-	if endpoint == "" || apiKey == "" {
-		badResp := model.GetMessageByScope("bad_talk_response")
-		if badResp != nil {
-			return badResp.GetContent()
-		}
-		return "申し訳ございません。エラーが発生しました。"
-	}
-
-	cleanMsg := strings.ReplaceAll(strings.ReplaceAll(msg, "\r", ""), "\n", "")
-	body := fmt.Sprintf(`{"model":"text-davinci-003","prompt":"%s","temperature":0.7,"max_tokens":256,"top_p":1,"frequency_penalty":0,"presence_penalty":0}`, cleanMsg)
-
-	req, _ := http.NewRequest("POST", endpoint, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		badResp := model.GetMessageByScope("bad_talk_response")
-		if badResp != nil {
-			return badResp.GetContent()
-		}
-		return "申し訳ございません。エラーが発生しました。"
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	var result map[string]interface{}
-	json.Unmarshal(respBody, &result)
-
-	choices, ok := result["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		badResp := model.GetMessageByScope("bad_talk_response")
-		if badResp != nil {
-			return badResp.GetContent()
-		}
-		return "申し訳ございません。エラーが発生しました。"
-	}
-
-	first := choices[0].(map[string]interface{})
-	text := first["text"].(string)
-	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r", ""), "\n", "")
-	text = strings.TrimPrefix(text, "。")
-	return text
+	return "この機能は現在利用できません。"
 }
 
 // ==================== GMessages ====================
@@ -548,81 +493,6 @@ func feelingSettingUpdate(user *model.User, msg string, _ string, nextMessage *m
 	return nextMessage.ToFormattedText()
 }
 
-// ==================== File Actions ====================
-
-func dreamWishFileCreate(user *model.User, msg string, _ string, nextMessage *model.Message) interface{} {
-	objectKey := "dream_wish/" + msg
-	if err := uploadToS3(objectKey, msg); err != nil {
-		badResp := model.GetMessageByScope("bad_talk_response")
-		if badResp != nil {
-			return badResp.GetContent()
-		}
-		return "エラーが発生しました"
-	}
-	wishes, _ := user.GetDreamWishes()
-	if len(wishes) > 0 {
-		model.UpdateWishS3URL(wishes[len(wishes)-1].ID, s3ObjectURL(objectKey))
-	}
-	return nextMessage.ToFormattedText()
-}
-
-func dreamWishFileUpdate(user *model.User, msg string, _ string, nextMessage *model.Message) interface{} {
-	objectKey := "dream_wish/" + msg
-	if err := uploadToS3(objectKey, msg); err != nil {
-		badResp := model.GetMessageByScope("bad_talk_response")
-		if badResp != nil {
-			return badResp.GetContent()
-		}
-		return "エラーが発生しました"
-	}
-	wishes, _ := user.GetDreamWishes()
-	idx := selectedNumber(user)
-	if idx >= 0 && idx < len(wishes) {
-		model.UpdateWishS3URL(wishes[idx].ID, s3ObjectURL(objectKey))
-	}
-	return nextMessage.ToFormattedText()
-}
-
-func dreamWishFileShow(user *model.User, msg string, replyToken string, nextMessage *model.Message) interface{} {
-	wishes, _ := user.GetDreamWishes()
-	idx, _ := strconv.Atoi(msg)
-	idx-- // 1-indexed to 0-indexed
-	if idx < 0 || idx >= len(wishes) {
-		return "この願いには画像が投稿されていません。"
-	}
-	w := model.FindWishByID(wishes[idx].ID)
-	if w == nil || w.GetS3ObjectURL() == "" {
-		return "この願いには画像が投稿されていません。"
-	}
-	contents := []map[string]string{
-		{"type": "text", "content": nextMessage.ToFormattedText()},
-		{"type": "image", "content": w.GetS3ObjectURL()},
-	}
-	ss := service.NewSendService()
-	ss.ReplyImageAndMessages(contents, replyToken)
-	return nil
-}
-
-func uploadToS3(objectKey, messageID string) error {
-	token := os.Getenv("LINE_CHANNEL_TOKEN")
-	url := fmt.Sprintf("https://api-data.line.me/v2/bot/message/%s/content", messageID)
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	s3Svc := service.NewS3Service()
-	bucket := os.Getenv("S3_BUCKET")
-	return s3Svc.Upload(bucket, objectKey, resp.Body)
-}
-
-func s3ObjectURL(objectKey string) string {
-	return os.Getenv("S3_ROOT_URL") + "/" + objectKey
-}
 
 // ==================== Admin: Broadcast ====================
 

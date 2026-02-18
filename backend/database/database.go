@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -19,7 +20,14 @@ func Connect() {
 	pass := getEnv("GMETHOD_DB_PASSWORD", "password")
 	dbName := getEnv("GMETHOD_DB_NAME", "gmethod_development")
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:3306)/%s?charset=utf8&parseTime=True&loc=Asia%%2FTokyo", user, pass, host, dbName)
+	var dsn string
+	if strings.HasPrefix(host, "/") {
+		// Cloud Run: Cloud SQL Auth Proxy 経由の Unix ソケット接続
+		dsn = fmt.Sprintf("%s:%s@unix(%s)/%s?charset=utf8&parseTime=True&loc=Asia%%2FTokyo", user, pass, host, dbName)
+	} else {
+		// ローカル開発: TCP 接続
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:3306)/%s?charset=utf8&parseTime=True&loc=Asia%%2FTokyo", user, pass, host, dbName)
+	}
 
 	var err error
 	DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{
