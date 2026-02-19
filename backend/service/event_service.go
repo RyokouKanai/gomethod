@@ -3,18 +3,22 @@ package service
 import (
 	"log"
 
+	"github.com/RyokouKanai/gomethod/action"
 	"github.com/RyokouKanai/gomethod/model"
 )
 
 // EventService handles LINE webhook events.
 type EventService struct {
-	sendService *SendService
+	sendService    *SendService
+	actionRegistry *action.Registry
 }
 
 // NewEventService creates a new EventService.
 func NewEventService() *EventService {
+	ss := NewSendService()
 	return &EventService{
-		sendService: NewSendService(),
+		sendService:    ss,
+		actionRegistry: action.NewRegistry(ss),
 	}
 }
 
@@ -38,6 +42,10 @@ func (es *EventService) HandleMessage(lineUserID, receivedMessage, replyToken st
 		return
 	}
 
+	// ReplyPatternService にアクションレジストリを接続
+	rps := NewReplyPatternService(user, receivedMessage, replyToken, es.sendService)
+	rps.SetActionExecutor(es.actionRegistry)
+
 	// Chain of responsibility - same order as Rails
 	services := []ServiceHandler{
 		NewAvailableService(user, receivedMessage, replyToken, es.sendService),
@@ -45,7 +53,7 @@ func (es *EventService) HandleMessage(lineUserID, receivedMessage, replyToken st
 		NewTopBackService(user, receivedMessage, replyToken, es.sendService),
 		NewBackService(user, receivedMessage, replyToken, es.sendService),
 		NewAdminLoginService(user, receivedMessage, replyToken, es.sendService),
-		NewReplyPatternService(user, receivedMessage, replyToken, es.sendService),
+		rps,
 	}
 
 	for _, svc := range services {

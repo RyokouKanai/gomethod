@@ -9,12 +9,18 @@ import (
 
 	"github.com/RyokouKanai/gomethod/database"
 	"github.com/RyokouKanai/gomethod/model"
-	"github.com/RyokouKanai/gomethod/service"
 )
+
+// Broadcaster is an interface for sending broadcast messages (avoids import cycle with service).
+type Broadcaster interface {
+	Broadcast(message string)
+	BroadcastToShik(message string, lineUserIDs []string)
+}
 
 // Registry maps execution_method names to action functions.
 type Registry struct {
-	actions map[string]ActionFunc
+	actions     map[string]ActionFunc
+	broadcaster Broadcaster
 }
 
 // ActionFunc is the function signature for all actions.
@@ -22,9 +28,10 @@ type Registry struct {
 type ActionFunc func(user *model.User, receivedMessage string, replyToken string, nextMessage *model.Message) interface{}
 
 // NewRegistry creates a new action registry with all actions registered.
-func NewRegistry() *Registry {
+func NewRegistry(broadcaster Broadcaster) *Registry {
 	r := &Registry{
-		actions: make(map[string]ActionFunc),
+		actions:     make(map[string]ActionFunc),
+		broadcaster: broadcaster,
 	}
 	r.registerAll()
 	return r
@@ -76,7 +83,30 @@ func (r *Registry) registerAll() {
 
 	// Admin actions
 	r.actions["broadcasts_confirm"] = broadcastsConfirm
-	r.actions["broadcasts"] = broadcasts
+	r.actions["broadcasts"] = func(user *model.User, _ string, _ string, nextMessage *model.Message) interface{} {
+		lm, err := user.GetLastMessage()
+		if err != nil || lm == nil {
+			return nextMessage.GetContent()
+		}
+		parts := strings.SplitN(lm.PlainContent(), ":&:", 2)
+		if len(parts) != 2 {
+			return nextMessage.GetContent()
+		}
+		rangeOption, _ := strconv.Atoi(parts[0])
+		sentMessage := parts[1]
+
+		if getRangeName(rangeOption) == "シックのみ" {
+			shikUsers, _ := model.GetShikUsers()
+			var ids []string
+			for _, u := range shikUsers {
+				ids = append(ids, u.LineUserID)
+			}
+			r.broadcaster.BroadcastToShik(sentMessage, ids)
+		} else {
+			r.broadcaster.Broadcast(sentMessage)
+		}
+		return nextMessage.GetContent()
+	}
 	r.actions["g_messages_create"] = gMessagesCreate
 	r.actions["g_messages_index"] = gMessagesIndex
 	r.actions["g_messages_destroy"] = gMessagesDestroy
@@ -507,31 +537,7 @@ func broadcastsConfirm(user *model.User, msg string, _ string, nextMessage *mode
 	return msg + "\n\n" + nextMessage.ToFormattedText() + "\n\n送信対象：" + rangeName
 }
 
-func broadcasts(user *model.User, _ string, _ string, nextMessage *model.Message) interface{} {
-	lm, err := user.GetLastMessage()
-	if err != nil || lm == nil {
-		return nextMessage.GetContent()
-	}
-	parts := strings.SplitN(lm.PlainContent(), ":&:", 2)
-	if len(parts) != 2 {
-		return nextMessage.GetContent()
-	}
-	rangeOption, _ := strconv.Atoi(parts[0])
-	sentMessage := parts[1]
-	ss := service.NewSendService()
 
-	if getRangeName(rangeOption) == "シックのみ" {
-		shikUsers, _ := model.GetShikUsers()
-		var ids []string
-		for _, u := range shikUsers {
-			ids = append(ids, u.LineUserID)
-		}
-		ss.BroadcastToShik(sentMessage, ids)
-	} else {
-		ss.Broadcast(sentMessage)
-	}
-	return nextMessage.GetContent()
-}
 
 func getRangeName(position int) string {
 	broadcastRangeMsg := model.GetMessageByScope("select_broadcast_range")
@@ -558,9 +564,9 @@ func gMessagesCRUD(period string) (
 		messages, _ := model.GetGMessagesByPeriod(period)
 		return nextMessage.GetContent() + "\n\n" + formatGMessages(messages)
 	}
-	destroy = func(_ *model.User, _ string, _ string, nextMessage *model.Message) interface{} {
+	destroy = func(user *model.User, _ string, _ string, nextMessage *model.Message) interface{} {
 		messages, _ := model.GetGMessagesByPeriod(period)
-		idx := selectedNumberFromMessages(messages)
+		idx := selectedNumber(user)
 		if idx < 0 || idx >= len(messages) {
 			return nextMessage.GetContent()
 		}
@@ -568,18 +574,18 @@ func gMessagesCRUD(period string) (
 		model.DeleteGMessage(messages[idx].ID)
 		return nextMessage.GetContent() + "\n\n" + plain
 	}
-	edit = func(_ *model.User, _ string, _ string, nextMessage *model.Message) interface{} {
+	edit = func(user *model.User, _ string, _ string, nextMessage *model.Message) interface{} {
 		messages, _ := model.GetGMessagesByPeriod(period)
-		idx := selectedNumberFromMessages(messages)
+		idx := selectedNumber(user)
 		if idx < 0 || idx >= len(messages) {
 			return nextMessage.GetContent()
 		}
 		label := periodLabel(period)
 		return nextMessage.GetContent() + "\n\n選択中の" + label + ":\n" + messages[idx].PlainContent()
 	}
-	update = func(_ *model.User, msg string, _ string, nextMessage *model.Message) interface{} {
+	update = func(user *model.User, msg string, _ string, nextMessage *model.Message) interface{} {
 		messages, _ := model.GetGMessagesByPeriod(period)
-		idx := selectedNumberFromMessages(messages)
+		idx := selectedNumber(user)
 		if idx < 0 || idx >= len(messages) {
 			return nextMessage.GetContent()
 		}
@@ -609,12 +615,7 @@ func periodLabel(period string) string {
 	return period
 }
 
-func selectedNumberFromMessages(_ []model.GMessage) int {
-	// This requires context from the user, which we don't have here
-	// In the original Ruby it used the same selectedNumber from last_message
-	// This will be handled by the calling context
-	return -1
-}
+
 
 // Generate admin CRUD functions for each period
 var (
